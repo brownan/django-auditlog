@@ -200,6 +200,19 @@ class LogRelationEntry(models.Model):
     def related_object(self):
         return self.content_type.get_object_for_this_type(pk=self.object_pk)
 
+    def __unicode__(self):
+        classes = []
+        current_class = self.log_entry.content_type.model_class()
+        for part in self.relation.split('__'):
+            current_class = current_class._meta.get_field_by_name(part)[0].model
+            classes.append(current_class.__name__)
+        classes = ' '.join(reversed(classes))
+
+        return "Related {relations:s} {repr:s}".format(
+            relations=classes,
+            repr=self.log_entry,
+        )
+
 
 class AuditlogHistoryField(generic.GenericRelation):
     """
