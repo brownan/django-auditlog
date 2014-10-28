@@ -6,6 +6,8 @@ from django.contrib.contenttypes.models import ContentType
 from django.db import models
 from django.utils.translation import ugettext_lazy as _
 
+from auditlog.relations import auditrels
+
 
 class LogEntryManager(models.Manager):
     """
@@ -36,9 +38,32 @@ class LogEntryManager(models.Manager):
                 else:
                     self.filter(content_type=kwargs.get('content_type'), object_pk=kwargs.get('object_pk', '')).delete()
 
-            return self.create(**kwargs)
-        return None
-        
+            log_entry = self.create(**kwargs)
+
+            # create related log entries
+            relations = auditrels.get(type(instance), None)
+
+            if relations:
+                relation_entries = []
+                for relation in relations:
+                    related_object = instance
+                    for part in relation.split('__'):
+                        related_object = getattr(related_object, part)
+
+                    pk = related_object.pk
+                    relation_entries.append(
+                        LogRelationEntry.objects.create(**{
+                            'content_type': ContentType.objects.get_for_model(related_object),
+                            'object_pk': related_object.pk,
+                            'object_id': pk if isinstance(pk, int) else None,
+                            'log_entry': log_entry,
+                            'relation': relation,
+                        })
+                    )
+                return log_entry, relation_entries
+            return log_entry, []
+        return None, []
+
     def get_for_object(self, instance):
         """
         Get log entries for the specified object.
@@ -152,7 +177,29 @@ class LogEntry(models.Model):
             substrings.append(substring)
 
         return separator.join(substrings)
-        
+
+    @property
+    def content_object(self):
+        return self.content_type.get_object_for_this_type(pk=self.object_pk)
+
+
+class LogRelationEntry(models.Model):
+    content_type = models.ForeignKey('contenttypes.ContentType', on_delete=models.CASCADE, related_name='+', verbose_name=_("content type"))
+    object_pk = models.TextField(verbose_name=_("object pk"))
+    object_id = models.PositiveIntegerField(blank=True, db_index=True, null=True, verbose_name=_("object id"))
+
+    relation = models.TextField()
+
+    log_entry = models.ForeignKey('LogEntry')
+
+    @property
+    def content_object(self):
+        self.log_entry.content_object
+
+    @property
+    def related_object(self):
+        return self.content_type.get_object_for_this_type(pk=self.object_pk)
+
 
 class AuditlogHistoryField(generic.GenericRelation):
     """
@@ -168,7 +215,7 @@ class AuditlogHistoryField(generic.GenericRelation):
     """
 
     def __init__(self, pk_indexable=True, **kwargs):
-        kwargs['to'] = LogEntry
+        kwargs.setdefault('to', LogEntry)
 
         if pk_indexable:
             kwargs['object_id_field'] = 'object_id'
@@ -178,9 +225,22 @@ class AuditlogHistoryField(generic.GenericRelation):
         kwargs['content_type_field'] = 'content_type'
         super(AuditlogHistoryField, self).__init__(**kwargs)
 
+
+class AuditlogRelatedHistoryField(AuditlogHistoryField):
+    """
+    A simple extension of AuditlogHistoryField for related log histories.
+    """
+
+    def __init__(self, **kwargs):
+        kwargs.setdefault('to', LogRelationEntry)
+        super(AuditlogRelatedHistoryField, self).__init__(**kwargs)
+
 # South compatibility for AuditlogHistoryField
 try:
     from south.modelsinspector import add_introspection_rules
     add_introspection_rules([], ["^southtut\.fields\.UpperCaseField"])
+    # ?
+    # add_introspection_rules([], ["^auditlog\.models\.AuditlogHistoryField"])
+    # add_introspection_rules([], ["^auditlog\.models\.AuditlogRelatedHistoryField"])
 except ImportError:
     pass
