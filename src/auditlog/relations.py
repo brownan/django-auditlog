@@ -24,7 +24,7 @@ class LogRelationsRegistry(dict):
                 # _meta.get_field_by_name
                 field = parent._meta.get_field(part)
                 if isinstance(field, RelatedField):
-                    parent = field.related.parent_model
+                    parent = field.rel.model
                 else:
                     raise ValueError("Error on '%s': '%s' has no relation '%s'" % (model, parent, part))
 
